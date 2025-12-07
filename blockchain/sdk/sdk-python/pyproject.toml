@@ -1,0 +1,13 @@
+[project]
+name = "kova-sdk"
+version = "0.1.0"
+description = "Python SDK for Kova L1 (scaffold)"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+

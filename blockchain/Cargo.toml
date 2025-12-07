@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "protocol/consensus",
+    "protocol/state",
+    "protocol/da",
+    "protocol/vm",
+    "protocol/runtime",
+    "protocol/networking",
+    "protocol/node",
+    "domains/evm_domain",
+    "domains/wasm_domain",
+    "domains/privacy_domain",
+    "domains/payment_domain",
+    "sequencer/core",
+    "sequencer/api",
+    "sequencer/coordinator",
+    "mixnet/client",
+    "mixnet/gateway",
+    "contracts/l1",
+    "contracts/rollup_bridge",
+    "contracts/governance",
+    "contracts/staking",
+    "contracts/domains_registry",
+    "contracts/privacy_pools",
+    "indexer/indexer-core",
+    "sdk/sdk-rust",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Kova Labs"]
+repository = "https://example.com/kova"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+async-trait = "0.1"
+ed25519-dalek = "2"
+rand = "0.8"
+bytes = "1"
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"] }
+serde_yaml = "0.9"
+hex = "0.4"
+

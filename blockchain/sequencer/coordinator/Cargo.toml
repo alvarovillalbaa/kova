@@ -1,0 +1,12 @@
+[package]
+name = "sequencer-coordinator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tracing = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+sequencer-core = { path = "../core" }
+da = { path = "../../protocol/da" }
+

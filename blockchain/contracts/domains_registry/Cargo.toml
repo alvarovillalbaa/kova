@@ -1,0 +1,12 @@
+[package]
+name = "contract-domains-registry"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+runtime = { path = "../../protocol/runtime" }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+

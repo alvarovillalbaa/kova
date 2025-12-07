@@ -1,0 +1,17 @@
+[package]
+name = "contract-l1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+runtime = { path = "../../protocol/runtime" }
+state = { path = "../../protocol/state" }
+anyhow = { workspace = true }
+contract-staking = { path = "../staking" }
+contract-domains-registry = { path = "../domains_registry" }
+contract-rollup-bridge = { path = "../rollup_bridge" }
+contract-governance = { path = "../governance" }
+contract-privacy-pools = { path = "../privacy_pools" }
+

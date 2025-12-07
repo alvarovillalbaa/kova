@@ -1,0 +1,12 @@
+[package]
+name = "evm_domain"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+runtime = { path = "../../protocol/runtime" }
+state = { path = "../../protocol/state" }
+anyhow = { workspace = true }
+

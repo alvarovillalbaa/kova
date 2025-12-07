@@ -1,0 +1,108 @@
+version: "3.9"
+
+x-node-base: &node-base
+  build:
+    context: ../../
+    dockerfile: ops/docker/node.Dockerfile
+  environment:
+    - RUST_LOG=info
+  volumes:
+    - ../../ops/docker/genesis.json:/app/ops/docker/genesis.json
+  command: ["/bin/sh", "-c", "sleep 1 && ./node"]
+
+services:
+  validator1:
+    <<: *node-base
+    container_name: kova-validator1
+    environment:
+      - NODE_ID=validator1
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0101010101010101010101010101010101010101010101010101010101010101
+    ports:
+      - "8545:8545"
+      - "9090:9090"
+  validator2:
+    <<: *node-base
+    container_name: kova-validator2
+    environment:
+      - NODE_ID=validator2
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0202020202020202020202020202020202020202020202020202020202020202
+  validator3:
+    <<: *node-base
+    container_name: kova-validator3
+    environment:
+      - NODE_ID=validator3
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0303030303030303030303030303030303030303030303030303030303030303
+  validator4:
+    <<: *node-base
+    container_name: kova-validator4
+    environment:
+      - NODE_ID=validator4
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0404040404040404040404040404040404040404040404040404040404040404
+
+  da_light:
+    image: rust:1.75
+    container_name: kova-da-light
+    command: ["sleep", "infinity"]
+
+  sequencer:
+    build:
+      context: ../../
+      dockerfile: ops/docker/sequencer.Dockerfile
+    container_name: kova-shared-sequencer
+    environment:
+      - SEQUENCER_PORT=7545
+    ports:
+      - "7545:7545"
+
+  postgres:
+    image: postgres:15
+    container_name: kova-postgres
+    environment:
+      POSTGRES_USER: kova
+      POSTGRES_PASSWORD: kova
+      POSTGRES_DB: kova_indexer
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  indexer_api:
+    image: node:20
+    container_name: kova-indexer-api
+    working_dir: /app
+    volumes:
+      - ../../indexer/api:/app
+    command: ["npm", "run", "dev"]
+    ports:
+      - "4000:4000"
+    environment:
+      - DATABASE_URL=postgres://kova:kova@postgres:5432/kova_indexer
+    depends_on:
+      - postgres
+
+  frontend:
+    image: node:20
+    container_name: kova-frontend
+    working_dir: /app
+    volumes:
+      - ../../frontend/apps/web:/app
+    command: ["npm", "run", "dev"]
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_RPC_URL=http://localhost:8545
+      - NEXT_PUBLIC_INDEXER_URL=http://localhost:4000
+      - NEXT_PUBLIC_SEQUENCER_URL=http://localhost:7545
+
+  mixnet_gateway:
+    image: rust:1.75
+    container_name: kova-mixnet-gateway
+    command: ["sleep", "infinity"]
+
+volumes:
+  pgdata:
+

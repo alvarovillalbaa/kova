@@ -1,0 +1,12 @@
+[package]
+name = "contract-privacy-pools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+runtime = { path = "../../protocol/runtime" }
+anyhow = { workspace = true }
+hex = { workspace = true }
+
