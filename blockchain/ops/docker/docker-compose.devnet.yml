@@ -76,13 +76,27 @@ services:
     working_dir: /app
     volumes:
       - ../../indexer/api:/app
-    command: ["npm", "run", "dev"]
+    command: ["sh", "-c", "npm install && npm run dev"]
     ports:
       - "4000:4000"
     environment:
       - DATABASE_URL=postgres://kova:kova@postgres:5432/kova_indexer
     depends_on:
       - postgres
+
+  indexer_ingest:
+    build:
+      context: ../../
+      dockerfile: ops/docker/indexer.Dockerfile
+    container_name: kova-indexer-ingest
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgres://kova:kova@postgres:5432/kova_indexer
+      - RPC_URL=http://validator1:8545
+      - START_HEIGHT=0
+    depends_on:
+      - postgres
+      - validator1
 
   frontend:
     image: node:20

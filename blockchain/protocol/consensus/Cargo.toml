@@ -14,4 +14,7 @@ state = { path = "../state" }
 da = { path = "../da" }
 tokio = { workspace = true }
 uuid = { workspace = true }
+bincode = "1"
+blake3 = "1"
+ed25519-dalek = { workspace = true }
 

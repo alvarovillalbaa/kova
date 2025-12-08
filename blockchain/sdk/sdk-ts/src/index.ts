@@ -15,6 +15,7 @@ export interface Tx {
   max_priority_fee?: string;
   gas_price?: string;
   payload: TxPayload;
+  public_key: string;
   signature: string;
 }
 
@@ -25,7 +26,9 @@ export async function sendRawTx(endpoint: string, tx: Tx) {
 export function buildTransfer(
   chain_id: string,
   toHex: string,
-  amount: string
+  amount: string,
+  public_key = "",
+  signature = ""
 ): Tx {
   return {
     chain_id,
@@ -33,14 +36,17 @@ export function buildTransfer(
     gas_limit: 21000,
     gas_price: "1",
     payload: { Transfer: { to: hexToBytes32(toHex), amount } },
-    signature: "",
+    public_key,
+    signature,
   };
 }
 
 export function buildStake(
   chain_id: string,
   amount: string,
-  gas_price = "1"
+  gas_price = "1",
+  public_key = "",
+  signature = ""
 ): Tx {
   return {
     chain_id,
@@ -48,7 +54,8 @@ export function buildStake(
     gas_limit: 50000,
     gas_price,
     payload: { Stake: { amount } },
-    signature: "",
+    public_key,
+    signature,
   };
 }
 
@@ -56,7 +63,9 @@ export function buildDelegate(
   chain_id: string,
   validatorHex: string,
   amount: string,
-  gas_price = "1"
+  gas_price = "1",
+  public_key = "",
+  signature = ""
 ): Tx {
   return {
     chain_id,
@@ -64,7 +73,8 @@ export function buildDelegate(
     gas_limit: 60000,
     gas_price,
     payload: { Delegate: { validator: hexToBytes32(validatorHex), amount } },
-    signature: "",
+    public_key,
+    signature,
   };
 }
 

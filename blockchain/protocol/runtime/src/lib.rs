@@ -1,3 +1,5 @@
+use blake3;
+use ed25519_dalek::{Signature, SigningKey, Signer, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use state::{
     Account, ChainState, Delegation, FeePools, InMemoryStateStore, StateStore, Validator,
@@ -38,6 +40,7 @@ pub struct Tx {
     pub max_priority_fee: Option<u128>,
     pub gas_price: Option<u128>,
     pub payload: TxPayload,
+    pub public_key: Vec<u8>,
     pub signature: Vec<u8>,
 }
 
@@ -136,11 +139,11 @@ pub async fn apply_tx<S: StateStore>(
     ctx: &ExecutionContext<S>,
     tx: &Tx,
 ) -> anyhow::Result<ExecutionOutcome> {
+    let sender = verify_tx_signature(tx)?;
     if tx.chain_id != ctx.chain_id {
         anyhow::bail!("invalid chain id");
     }
 
-    let sender = derive_sender(&tx.signature);
     let mut sender_account = ctx
         .state
         .get_account(&sender)
@@ -225,8 +228,6 @@ pub async fn apply_tx<S: StateStore>(
             if v.stake == 0 {
                 v.status = ValidatorStatus::Exited;
             }
-            ctx.state.put_chain_state(chain).await?;
-
             sender_account.balance_x = sender_account
                 .balance_x
                 .checked_add(*amount)
@@ -252,8 +253,6 @@ pub async fn apply_tx<S: StateStore>(
                 validator_id: v.id,
                 stake: *amount,
             });
-            ctx.state.put_chain_state(chain).await?;
-
             sender_account.balance_x = sender_account
                 .balance_x
                 .checked_sub(*amount + gas_fee)
@@ -287,8 +286,6 @@ pub async fn apply_tx<S: StateStore>(
                 anyhow::bail!("delegation not found");
             }
             chain.delegations.retain(|d| d.stake > 0);
-            ctx.state.put_chain_state(chain).await?;
-
             sender_account.balance_x = sender_account
                 .balance_x
                 .checked_add(*amount)
@@ -571,15 +568,6 @@ pub struct BlockApplyResult {
     pub events: Vec<String>,
 }
 
-pub fn derive_sender(signature: &[u8]) -> Address {
-    // Placeholder: replace with real recovery from signature.
-    let mut addr = [0u8; 32];
-    for (i, b) in signature.iter().take(32).enumerate() {
-        addr[i] = *b;
-    }
-    addr
-}
-
 pub fn bootstrap_state() -> ExecutionContext<InMemoryStateStore> {
     let default_genesis = GenesisConfig {
         chain_id: "kova-devnet".into(),
@@ -624,7 +612,7 @@ pub async fn from_genesis(
     }
 
     for v in genesis.initial_validators {
-        let id = Uuid::new_v4();
+        let id = validator_id_from_pubkey(&v.pubkey);
         chain.validators.insert(
             id,
             Validator {
@@ -722,16 +710,62 @@ fn route_gas_fee(chain: &mut ChainState, gas_fee: u128, split: &FeeSplit) {
 }
 
 fn derive_owner_from_pubkey(pubkey: &[u8]) -> Address {
-    let mut addr = [0u8; 32];
-    for (i, b) in pubkey.iter().take(32).enumerate() {
-        addr[i] = *b;
-    }
-    addr
+    address_from_pubkey(pubkey)
+}
+
+fn validator_id_from_pubkey(pubkey: &[u8]) -> Uuid {
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, pubkey)
 }
 
 pub fn hash_block(block: &Block) -> Hash {
     let bytes = bincode::serialize(block).unwrap_or_default();
     let digest = blake3::hash(&bytes);
     *digest.as_bytes()
+}
+
+pub fn address_from_pubkey(pubkey: &[u8]) -> Address {
+    let digest = blake3::hash(pubkey);
+    *digest.as_bytes()
+}
+
+pub fn sign_bytes(signing_key: &SigningKey, msg: &[u8]) -> Vec<u8> {
+    signing_key.sign(msg).to_bytes().to_vec()
+}
+
+pub fn verify_signature_bytes(
+    public_key: &[u8],
+    signature: &[u8],
+    msg: &[u8],
+) -> anyhow::Result<()> {
+    let pk_bytes: &[u8; 32] = public_key
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid pubkey length"))?;
+    let sig_bytes: &[u8; 64] = signature
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid signature length"))?;
+    let vk = VerifyingKey::from_bytes(pk_bytes)?;
+    let sig = Signature::from_bytes(sig_bytes);
+    vk.verify(msg, &sig)?;
+    Ok(())
+}
+
+pub fn tx_signing_bytes(tx: &Tx) -> anyhow::Result<Vec<u8>> {
+    let signable = (
+        &tx.chain_id,
+        tx.nonce,
+        tx.gas_limit,
+        tx.max_fee,
+        tx.max_priority_fee,
+        tx.gas_price,
+        &tx.payload,
+        &tx.public_key,
+    );
+    Ok(bincode::serialize(&signable)?)
+}
+
+pub fn verify_tx_signature(tx: &Tx) -> anyhow::Result<Address> {
+    let msg = tx_signing_bytes(tx)?;
+    verify_signature_bytes(&tx.public_key, &tx.signature, &msg)?;
+    Ok(address_from_pubkey(&tx.public_key))
 }
 

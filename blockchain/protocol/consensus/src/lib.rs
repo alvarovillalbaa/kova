@@ -1,12 +1,30 @@
 use async_trait::async_trait;
 use blake3;
-use runtime::{hash_block, Block, BlockHeader, Hash, Tx};
+use runtime::{
+    address_from_pubkey, hash_block, sign_bytes, verify_signature_bytes, Block, BlockHeader, Hash,
+    Tx,
+};
 use serde::{Deserialize, Serialize};
 use state::Validator;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::time::{self, Duration};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedProposal {
+    pub block: Block,
+    pub public_key: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedVote {
+    pub block_id: Hash,
+    pub view: u64,
+    pub voter: Validator,
+    pub signature: Vec<u8>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlashEvidence {
@@ -28,6 +46,7 @@ pub struct QuorumCertificate {
     pub block_id: Hash,
     pub view: u64,
     pub signatures: Vec<Vec<u8>>,
+    pub voters: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,8 +59,8 @@ pub struct ConsensusState {
 
 #[async_trait]
 pub trait ConsensusEngine: Send + Sync {
-    async fn propose(&self, block: Block) -> anyhow::Result<()>;
-    async fn vote(&self, block_id: Hash, view: u64, voter: &Validator) -> anyhow::Result<()>;
+    async fn propose(&self, proposal: SignedProposal) -> anyhow::Result<()>;
+    async fn vote(&self, vote: SignedVote) -> anyhow::Result<()>;
     async fn on_qc(&self, qc: QuorumCertificate) -> anyhow::Result<()>;
     async fn on_timeout(&self, view: u64) -> anyhow::Result<()>;
     async fn validator_set(&self) -> anyhow::Result<Vec<Validator>>;
@@ -81,6 +100,7 @@ struct HotStuffInner {
 struct VoteTally {
     stake: u128,
     voters: Vec<Uuid>,
+    signatures: Vec<Vec<u8>>,
 }
 
 impl HotStuffEngine {
@@ -137,39 +157,58 @@ impl HotStuffInner {
 
 #[async_trait]
 impl ConsensusEngine for HotStuffEngine {
-    async fn propose(&self, block: Block) -> anyhow::Result<()> {
+    async fn propose(&self, proposal: SignedProposal) -> anyhow::Result<()> {
+        let block = proposal.block.clone();
+        let block_id = hash_block(&block);
+        verify_proposal(&proposal, block_id)?;
+
         let mut guard = self.inner.lock().unwrap();
         if let Some(leader) = guard.leader_for_view(guard.state.view) {
             if leader.owner != block.header.proposer_id {
                 tracing::warn!("proposal from non-leader for view {}", guard.state.view);
             }
         }
-        let block_id = hash_block(&block);
-        guard.pending_blocks.insert(block_id, block);
-        guard.block_tree.insert(block_id, guard.pending_blocks[&block_id].clone());
+        let block_clone = proposal.block.clone();
+        guard.pending_blocks.insert(block_id, block_clone.clone());
+        guard.block_tree.insert(block_id, block_clone);
         guard.state.view += 1;
         Ok(())
     }
 
-    async fn vote(&self, block_id: Hash, view: u64, voter: &Validator) -> anyhow::Result<()> {
+    async fn vote(&self, vote: SignedVote) -> anyhow::Result<()> {
         let mut guard = self.inner.lock().unwrap();
-        let tally = guard
-            .votes
-            .entry((block_id, view))
-            .or_insert_with(VoteTally::default);
+        verify_vote(&vote, &guard.validators)?;
+        let block_id = vote.block_id;
+        let view = vote.view;
 
-        if tally.voters.contains(&voter.id) {
-            return Ok(()); // ignore duplicate vote
-        }
+        let threshold = guard.quorum_threshold();
+        let (enough, signatures, voters) = {
+            let tally = guard
+                .votes
+                .entry((block_id, view))
+                .or_insert_with(VoteTally::default);
 
-        tally.voters.push(voter.id);
-        tally.stake = tally.stake.saturating_add(voter.stake);
+            if tally.voters.contains(&vote.voter.id) {
+                return Ok(()); // ignore duplicate vote
+            }
 
-        if tally.stake >= guard.quorum_threshold() {
+            tally.voters.push(vote.voter.id);
+            tally.stake = tally.stake.saturating_add(vote.voter.stake);
+            tally.signatures.push(vote.signature.clone());
+
+            if tally.stake >= threshold {
+                (true, tally.signatures.clone(), tally.voters.clone())
+            } else {
+                (false, Vec::new(), Vec::new())
+            }
+        };
+
+        if enough {
             let qc = QuorumCertificate {
                 block_id,
                 view,
-                signatures: vec![],
+                signatures,
+                voters,
             };
             guard.state.pending_qc = Some(qc.clone());
             guard.state.locked_qc = Some(qc.clone());
@@ -239,5 +278,41 @@ impl ConsensusEngine for HotStuffEngine {
         let guard = self.inner.lock().unwrap();
         guard.state.view
     }
+}
+
+fn verify_proposal(proposal: &SignedProposal, block_id: Hash) -> anyhow::Result<()> {
+    let proposer_addr = address_from_pubkey(&proposal.public_key);
+    if proposer_addr != proposal.block.header.proposer_id {
+        anyhow::bail!("proposal proposer_id does not match pubkey");
+    }
+    verify_signature_bytes(&proposal.public_key, &proposal.signature, &block_id)?;
+    Ok(())
+}
+
+fn vote_signing_bytes(block_id: &Hash, view: u64) -> anyhow::Result<Vec<u8>> {
+    Ok(bincode::serialize(&(block_id, view))?)
+}
+
+fn verify_vote(vote: &SignedVote, validators: &[Validator]) -> anyhow::Result<()> {
+    let expected = validators
+        .iter()
+        .find(|v| v.id == vote.voter.id)
+        .ok_or_else(|| anyhow::anyhow!("voter not in validator set"))?;
+    if expected.pubkey != vote.voter.pubkey {
+        anyhow::bail!("voter pubkey mismatch");
+    }
+    let msg = vote_signing_bytes(&vote.block_id, vote.view)?;
+    verify_signature_bytes(&vote.voter.pubkey, &vote.signature, &msg)?;
+    Ok(())
+}
+
+pub fn sign_vote(block_id: &Hash, view: u64, signing_key: &ed25519_dalek::SigningKey) -> Vec<u8> {
+    let bytes = bincode::serialize(&(block_id, view)).unwrap_or_default();
+    sign_bytes(signing_key, &bytes)
+}
+
+pub fn sign_proposal(block: &Block, signing_key: &ed25519_dalek::SigningKey) -> Vec<u8> {
+    let block_id = hash_block(block);
+    sign_bytes(signing_key, block_id.as_slice())
 }
 

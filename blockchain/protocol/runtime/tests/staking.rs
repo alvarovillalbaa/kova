@@ -1,10 +1,16 @@
-use runtime::{apply_block, bootstrap_state, Block, BlockHeader, Tx, TxPayload};
+use ed25519_dalek::SigningKey;
+use runtime::{
+    address_from_pubkey, apply_block, bootstrap_state, sign_bytes, tx_signing_bytes, Block,
+    BlockHeader, Tx, TxPayload,
+};
 use state::{Account, StateStore};
 
 #[tokio::test]
 async fn stake_creates_validator_and_updates_balance() {
     let ctx = bootstrap_state();
-    let owner = [7u8; 32];
+    let sk = SigningKey::from_bytes(&[7u8; 32]);
+    let public_key = sk.verifying_key().to_bytes().to_vec();
+    let owner = address_from_pubkey(&public_key);
 
     // fund owner
     ctx.state
@@ -18,7 +24,7 @@ async fn stake_creates_validator_and_updates_balance() {
         .await
         .unwrap();
 
-    let tx = Tx {
+    let mut tx = Tx {
         chain_id: "kova-devnet".into(),
         nonce: 0,
         gas_limit: 50_000,
@@ -26,8 +32,11 @@ async fn stake_creates_validator_and_updates_balance() {
         max_priority_fee: None,
         gas_price: Some(1),
         payload: TxPayload::Stake { amount: 100_000 },
-        signature: owner.to_vec(), // derives sender
+        public_key: public_key.clone(),
+        signature: vec![],
     };
+    let msg = tx_signing_bytes(&tx).unwrap();
+    tx.signature = sign_bytes(&sk, &msg);
 
     let block = Block {
         header: BlockHeader {

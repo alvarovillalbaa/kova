@@ -9,9 +9,11 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "fastify": "^4.27.0"
+    "fastify": "^4.27.0",
+    "pg": "^8.11.3"
   },
   "devDependencies": {
+    "@types/node": "^20.12.7",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.0"
   }

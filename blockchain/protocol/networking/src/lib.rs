@@ -1,4 +1,5 @@
-use runtime::{Block, Hash};
+use consensus::{SignedProposal, SignedVote};
+use runtime::Block;
 use serde::{Deserialize, Serialize};
 use state::Validator;
 
@@ -19,12 +20,8 @@ pub trait BlockPropagation: Send + Sync {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConsensusMessage {
-    Propose(Block),
-    Vote {
-        block_id: Hash,
-        view: u64,
-        voter: Validator,
-    },
+    Propose(SignedProposal),
+    Vote(SignedVote),
     Timeout {
         view: u64,
         from: Validator,

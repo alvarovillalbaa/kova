@@ -9,4 +9,5 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true }
 runtime = { path = "../../protocol/runtime" }
+ed25519-dalek = { workspace = true }
 

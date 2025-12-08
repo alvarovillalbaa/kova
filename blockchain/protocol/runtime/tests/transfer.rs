@@ -1,10 +1,16 @@
-use runtime::{apply_block, bootstrap_state, Block, BlockHeader, Tx, TxPayload};
+use ed25519_dalek::SigningKey;
+use runtime::{
+    address_from_pubkey, apply_block, bootstrap_state, sign_bytes, tx_signing_bytes, Block,
+    BlockHeader, Tx, TxPayload,
+};
 use state::{Account, StateStore};
 
 #[tokio::test]
 async fn transfer_moves_balance() {
     let ctx = bootstrap_state();
-    let from = [1u8; 32];
+    let sk = SigningKey::from_bytes(&[3u8; 32]);
+    let public_key = sk.verifying_key().to_bytes().to_vec();
+    let from = address_from_pubkey(&public_key);
     let to = [2u8; 32];
 
     // fund sender
@@ -19,7 +25,7 @@ async fn transfer_moves_balance() {
         .await
         .unwrap();
 
-    let tx = Tx {
+    let mut tx = Tx {
         chain_id: "kova-devnet".into(),
         nonce: 0,
         gas_limit: 21_000,
@@ -27,8 +33,11 @@ async fn transfer_moves_balance() {
         max_priority_fee: None,
         gas_price: Some(1),
         payload: TxPayload::Transfer { to, amount: 10 },
-        signature: vec![1; 32],
+        public_key: public_key.clone(),
+        signature: vec![],
     };
+    let msg = tx_signing_bytes(&tx).unwrap();
+    tx.signature = sign_bytes(&sk, &msg);
 
     let block = Block {
         header: BlockHeader {
