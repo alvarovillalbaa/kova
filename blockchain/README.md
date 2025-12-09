@@ -31,4 +31,5 @@ This repository contains scaffolds for the L1 protocol, domains, sequencer, inde
 ## Notes
 - The code is scaffolded: interfaces and types are present; logic is intentionally minimal.
 - Follow the implementation order from `docs/init.md` when adding functionality.
+- ZK: set `ENABLE_ZK=1` to enable proving/verification; ELFs load from `zk/artifacts/{block,rollup,privacy}.elf` or override with `ZK_SP1_*_ELF` env vars. Stub artifacts are included for devnet only.
 

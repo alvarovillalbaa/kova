@@ -47,7 +47,7 @@ async fn transfer_moves_balance() {
             proposer_id: [0u8; 32],
             state_root: [0u8; 32],
             l1_tx_root: [0u8; 32],
-            da_root: [0u8; 32],
+        da_commitment: None,
             domain_roots: vec![],
             gas_used: 0,
             gas_limit: 30_000_000,

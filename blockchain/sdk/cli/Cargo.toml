@@ -1,0 +1,21 @@
+[[bin]]
+name = "kova-cli"
+path = "src/main.rs"
+
+[package]
+name = "kova-cli"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+reqwest = { workspace = true, default-features = false, features = ["rustls-tls", "json", "blocking"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["pkcs8"] }
+hex = { workspace = true }
+sdk-rust = { package = "kova-sdk", path = "../sdk-rust" }
+runtime = { path = "../../protocol/runtime" }

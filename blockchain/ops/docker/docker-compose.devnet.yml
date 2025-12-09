@@ -18,9 +18,11 @@ services:
       - NODE_ID=validator1
       - GENESIS_PATH=/app/ops/docker/genesis.json
       - VALIDATOR_OWNER=0x0101010101010101010101010101010101010101010101010101010101010101
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9000/quic-v1
     ports:
       - "8545:8545"
       - "9090:9090"
+      - "9000:9000/udp"
   validator2:
     <<: *node-base
     container_name: kova-validator2
@@ -28,6 +30,10 @@ services:
       - NODE_ID=validator2
       - GENESIS_PATH=/app/ops/docker/genesis.json
       - VALIDATOR_OWNER=0x0202020202020202020202020202020202020202020202020202020202020202
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9001/quic-v1
+      - P2P_BOOTSTRAP=/dns4/validator1/udp/9000/quic-v1
+    ports:
+      - "9001:9001/udp"
   validator3:
     <<: *node-base
     container_name: kova-validator3
@@ -35,6 +41,10 @@ services:
       - NODE_ID=validator3
       - GENESIS_PATH=/app/ops/docker/genesis.json
       - VALIDATOR_OWNER=0x0303030303030303030303030303030303030303030303030303030303030303
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9002/quic-v1
+      - P2P_BOOTSTRAP=/dns4/validator1/udp/9000/quic-v1
+    ports:
+      - "9002:9002/udp"
   validator4:
     <<: *node-base
     container_name: kova-validator4
@@ -42,6 +52,10 @@ services:
       - NODE_ID=validator4
       - GENESIS_PATH=/app/ops/docker/genesis.json
       - VALIDATOR_OWNER=0x0404040404040404040404040404040404040404040404040404040404040404
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9003/quic-v1
+      - P2P_BOOTSTRAP=/dns4/validator1/udp/9000/quic-v1
+    ports:
+      - "9003:9003/udp"
 
   da_light:
     image: rust:1.75

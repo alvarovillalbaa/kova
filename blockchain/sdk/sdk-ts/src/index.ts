@@ -5,7 +5,32 @@ type AddressBytes = number[];
 export type TxPayload =
   | { Transfer: { to: AddressBytes; amount: string } }
   | { Stake: { amount: string } }
-  | { Delegate: { validator: AddressBytes; amount: string } };
+  | { Delegate: { validator: AddressBytes; amount: string } }
+  | { DomainExecute: DomainCall }
+  | {
+    CrossDomainSend: {
+      from_domain: string;
+      to_domain: string;
+      payload: any;
+      fee: string;
+    };
+  }
+  | { CrossDomainRelay: { message: CrossDomainMessage } };
+
+export interface DomainCall {
+  domain_id: string;
+  payload: any;
+  raw?: number[];
+  max_gas?: number;
+}
+
+export interface CrossDomainMessage {
+  from: string;
+  to: string;
+  nonce: number;
+  fee: string;
+  payload: any;
+}
 
 export interface Tx {
   chain_id: string;
@@ -78,6 +103,81 @@ export function buildDelegate(
   };
 }
 
+export function buildDomainExecute(
+  chain_id: string,
+  domain_id: string,
+  payload: any,
+  max_gas = 3_000_000,
+  rawHex?: string,
+  gas_price = "1",
+  public_key = "",
+  signature = ""
+): Tx {
+  const raw = rawHex ? hexToBytes(rawHex) : undefined;
+  return {
+    chain_id,
+    nonce: 0,
+    gas_limit: max_gas,
+    gas_price,
+    payload: {
+      DomainExecute: {
+        domain_id,
+        payload,
+        raw,
+        max_gas,
+      },
+    },
+    public_key,
+    signature,
+  };
+}
+
+export function buildCrossDomainSend(
+  chain_id: string,
+  from_domain: string,
+  to_domain: string,
+  payload: any,
+  fee: string,
+  gas_price = "1",
+  public_key = "",
+  signature = ""
+): Tx {
+  return {
+    chain_id,
+    nonce: 0,
+    gas_limit: 90000,
+    gas_price,
+    payload: {
+      CrossDomainSend: {
+        from_domain,
+        to_domain,
+        payload,
+        fee,
+      },
+    },
+    public_key,
+    signature,
+  };
+}
+
+export function buildCrossDomainRelay(
+  chain_id: string,
+  message: CrossDomainMessage,
+  gas_price = "1",
+  public_key = "",
+  signature = ""
+): Tx {
+  return {
+    chain_id,
+    nonce: 0,
+    gas_limit: 50000,
+    gas_price,
+    payload: { CrossDomainRelay: { message } },
+    public_key,
+    signature,
+  };
+}
+
 export async function submitToSequencer(apiBase: string, domain_id: string, tx: Tx) {
   return axios.post(`${apiBase}/v1/submit_tx`, { domain_id, tx });
 }
@@ -100,4 +200,10 @@ function hexToBytes32(hex: string): AddressBytes {
     buf[i] = bytes[i];
   }
   return buf;
+}
+
+function hexToBytes(hex: string): number[] {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const bytes = clean.match(/.{1,2}/g)?.map((b) => parseInt(b, 16)) ?? [];
+  return bytes;
 }

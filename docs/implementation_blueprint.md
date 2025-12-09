@@ -52,6 +52,7 @@
 - Kernel exposes syscalls: `read_state`, `write_state`, `emit_event`, `call_precompile`, `verify_zk_proof`.
 - Precompiles: hashes (Poseidon, Keccak, SHA-2), curves (BLS12-381, Pasta), signatures (ed25519, secp256k1), ZK helpers (MSM, FFT), privacy primitives (commitments, Merkle).
 - System contracts (Rust/WASM): staking, governance, domains registry, bridges, privacy pools.
+- ZK backend: SP1 proving enabled by default (feature `sp1`); load ELFs via `ZK_SP1_BLOCK_ELF` / `ZK_SP1_ROLLUP_ELF` / `ZK_SP1_PRIVACY_ELF` or `zk/artifacts/*.elf`; swap-ready registry for other backends.
 
 ### 2.6 Domains & Rollups
 - Domain shape: `{ id, type(EVM|WASM|PRIVACY|PAYMENT|CUSTOM), security_model(shared|own), execution_vm, da_mode(oncain|offchain|volition), sequencer_binding(shared|dedicated), token_model(X|local), risk_params }`

@@ -17,4 +17,12 @@ bincode = "1"
 futures = "0.3"
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
+zk-core = { path = "../../zk/core" }
+zk-program-privacy = { path = "../../zk/programs/privacy" }
+async-trait = "0.1"
+revm = { version = "33.1.0", default-features = false, features = ["std"] }
+wasmtime = { version = "22", default-features = false, features = ["cranelift"] }
+base64 = "0.21"
 
+[dev-dependencies]
+proptest = { workspace = true }

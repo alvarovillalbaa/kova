@@ -23,4 +23,10 @@ hex = { workspace = true }
 ed25519-dalek = { workspace = true }
 futures = "0.3"
 uuid = { workspace = true }
+zk-core = { path = "../../zk/core" }
+zk-sp1 = { path = "../../zk/sp1" }
+zk-program-block = { path = "../../zk/programs/block" }
+zk-program-rollup = { path = "../../zk/programs/rollup" }
+zk-program-privacy = { path = "../../zk/programs/privacy" }
+libp2p = { version = "0.54", features = ["identity", "macros", "quic", "gossipsub", "dns", "tcp", "serde", "tokio"] }
 

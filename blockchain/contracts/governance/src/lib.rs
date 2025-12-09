@@ -14,7 +14,9 @@ pub fn handle(tx: &Tx) -> anyhow::Result<()> {
         runtime::TxPayload::GovernanceProposal { .. } => {
             submit_proposal(tx).map(|_| ())
         }
-        runtime::TxPayload::GovernanceVote { .. } => vote(tx),
+        runtime::TxPayload::GovernanceVote { .. }
+        | runtime::TxPayload::GovernanceBridgeApprove { .. }
+        | runtime::TxPayload::GovernanceExecute { .. } => vote(tx),
         _ => Ok(()),
     }
 }

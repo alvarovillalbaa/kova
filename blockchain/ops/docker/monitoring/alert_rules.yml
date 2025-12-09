@@ -1,0 +1,11 @@
+groups:
+  - name: availability
+    rules:
+      - alert: InstanceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Target {{ $labels.instance }} is down"
+          description: "Prometheus target {{ $labels.instance }} (job {{ $labels.job }}) has been unreachable for 2 minutes."

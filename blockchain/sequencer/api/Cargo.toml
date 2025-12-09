@@ -11,4 +11,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 sequencer-core = { path = "../core" }
 runtime = { path = "../../protocol/runtime" }
+zk-core = { path = "../../zk/core" }
+zk-sp1 = { path = "../../zk/sp1" }
+zk-program-rollup = { path = "../../zk/programs/rollup" }
+zk-program-privacy = { path = "../../zk/programs/privacy" }
 

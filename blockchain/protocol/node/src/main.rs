@@ -1,13 +1,14 @@
 use axum::{
-    extract::Path,
+    extract::{Path, Query},
     routing::{get, post},
     Json, Router,
 };
 use consensus::{sign_proposal, sign_vote, ConsensusEngine, HotStuffEngine, SignedProposal, SignedVote};
-use da::{DAProvider, InMemoryDA};
-use networking::{ConsensusMessage, ConsensusNetwork, NoopConsensusNetwork};
+use da::{DAProvider, InMemoryDA, verify_da_proof};
+use networking::{parse_multiaddr_list, start_libp2p_consensus, ConsensusMessage, ConsensusNetwork, NoopConsensusNetwork};
 use runtime::{
-    address_from_pubkey, apply_block, bootstrap_state, hash_block, load_genesis_from_file, verify_tx_signature,
+    address_from_pubkey, apply_block, bootstrap_state, hash_block, load_genesis_from_file, verify_signature_bytes,
+    verify_tx_signature,
     Block, BlockHeader, ExecutionContext, Hash, Tx,
 };
 use serde::{Deserialize, Serialize};
@@ -19,11 +20,20 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
 use ed25519_dalek::SigningKey;
+use libp2p::{identity, Multiaddr};
 use blake3;
 use uuid::Uuid;
+use zk_core::{BlockProof, ProgramId, ProofRequest, ZkBackend};
+use zk_program_block;
+use zk_program_privacy;
+use zk_program_rollup;
+use zk_sp1::{Sp1Backend, Sp1Config, Sp1Program};
+use std::fs;
+
+const MEMPOOL_LIMIT: usize = 10_000;
 
 #[derive(Clone)]
 struct Node {
@@ -37,9 +47,11 @@ struct Node {
     network: Arc<dyn ConsensusNetwork + Send + Sync>,
     tx_index: Arc<Mutex<HashMap<Hash, (Tx, u64)>>>,
     block_store: Arc<Mutex<HashMap<Hash, Block>>>,
+    block_proofs: Arc<Mutex<HashMap<Hash, BlockProof>>>,
     applied: Arc<Mutex<HashSet<Hash>>>,
     signing_key: Arc<SigningKey>,
     verifying_key: Vec<u8>,
+    zk: Option<Arc<dyn ZkBackend>>,
 }
 
 #[derive(Clone)]
@@ -62,6 +74,42 @@ impl ConsensusNetwork for LocalBus {
     fn broadcast(&self, msg: ConsensusMessage) {
         let _ = self.tx.send(msg);
     }
+
+    fn broadcast_tx(&self, _tx: &Tx) {
+        // in-process only; tx gossip handled via libp2p
+    }
+}
+
+fn default_listen_addr() -> Multiaddr {
+    "/ip4/0.0.0.0/udp/9000/quic-v1"
+        .parse()
+        .unwrap_or_else(|_| "/ip4/0.0.0.0/udp/9000/quic-v1".parse().unwrap())
+}
+
+async fn init_consensus_network(
+    node_id: &str,
+) -> (
+    Arc<dyn ConsensusNetwork + Send + Sync>,
+    Option<mpsc::Receiver<ConsensusMessage>>,
+    Option<mpsc::Receiver<Tx>>,
+) {
+    let listen = env::var("P2P_LISTEN").unwrap_or_else(|_| "/ip4/0.0.0.0/udp/9000/quic-v1".into());
+    let listen_addr: Multiaddr = listen.parse().unwrap_or_else(|_| default_listen_addr());
+    let bootstrap = env::var("P2P_BOOTSTRAP").unwrap_or_default();
+    let seed = derive_signing_key(node_id).to_bytes();
+    let keypair = identity::Keypair::ed25519_from_bytes(seed.to_vec())
+        .unwrap_or_else(|_| identity::Keypair::generate_ed25519());
+    match start_libp2p_consensus(keypair, listen_addr, parse_multiaddr_list(&bootstrap)).await {
+        Ok((net, consensus_rx, tx_rx)) => (
+            net as Arc<dyn ConsensusNetwork + Send + Sync>,
+            Some(consensus_rx),
+            Some(tx_rx),
+        ),
+        Err(err) => {
+            warn!("libp2p consensus fallback to noop: {err}");
+            (Arc::new(NoopConsensusNetwork::default()), None, None)
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -71,9 +119,62 @@ struct Status {
     view: u64,
 }
 
+fn init_zk_backend() -> Option<Arc<dyn ZkBackend>> {
+    let enabled = env::var("ENABLE_ZK").unwrap_or_else(|_| "0".into());
+    if enabled != "1" && enabled.to_lowercase() != "true" {
+        return None;
+    }
+    let block_elf = load_elf("ZK_SP1_BLOCK_ELF", "zk/artifacts/block.elf");
+    let rollup_elf = load_elf("ZK_SP1_ROLLUP_ELF", "zk/artifacts/rollup.elf");
+    let privacy_elf = load_elf("ZK_SP1_PRIVACY_ELF", "zk/artifacts/privacy.elf");
+
+    let programs = vec![
+        Sp1Program {
+            id: zk_program_block::program_id(),
+            elf: block_elf.unwrap_or_default(),
+            name: "block_transition".into(),
+            version: "0.1.0",
+        },
+        Sp1Program {
+            id: zk_program_rollup::program_id(),
+            elf: rollup_elf.unwrap_or_default(),
+            name: "rollup_batch".into(),
+            version: "0.1.0",
+        },
+        Sp1Program {
+            id: zk_program_privacy::program_id(),
+            elf: privacy_elf.unwrap_or_default(),
+            name: "privacy_withdraw".into(),
+            version: "0.1.0",
+        },
+    ];
+    let backend = Sp1Backend::new(Sp1Config {
+        programs,
+        verify_only: false,
+    });
+    Some(Arc::new(backend))
+}
+
+fn load_elf(env_key: &str, default_path: &str) -> Option<Vec<u8>> {
+    let path = env::var(env_key).unwrap_or_else(|_| default_path.into());
+    match fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(err) => {
+            warn!("unable to read {} ({}): {}", env_key, path, err);
+            None
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct TxRequest {
     tx: Tx,
+}
+
+#[derive(Deserialize)]
+struct SampleQuery {
+    blob_id: String,
+    samples: Option<usize>,
 }
 
 #[tokio::main]
@@ -82,23 +183,35 @@ async fn main() -> anyhow::Result<()> {
     let node_id = env::var("NODE_ID").unwrap_or_else(|_| "node-0".into());
     info!("kova node starting ({})", node_id);
 
+    let zk_backend = init_zk_backend();
+
     let genesis_ctx = if let Ok(path) = env::var("GENESIS_PATH") {
         info!("loading genesis from {}", path);
         load_genesis_from_file(path)?
     } else {
         bootstrap_state()
-    };
+    }
+    .with_zk(zk_backend.clone());
+
+    let (network, consensus_rx, tx_rx) = init_consensus_network(&node_id).await;
 
     let node = create_node_with(
         &node_id,
         genesis_ctx,
         InMemoryDA::new(),
-        Arc::new(NoopConsensusNetwork::default()),
+        network.clone(),
+        zk_backend.clone(),
     )
     .await?;
 
     let proposer = spawn_block_production(node.clone());
     tokio::spawn(node.consensus.clone().run_timeouts());
+    if let Some(rx) = consensus_rx {
+        spawn_p2p_consensus_listener(node.clone(), rx);
+    }
+    if let Some(rx) = tx_rx {
+        spawn_tx_gossip_listener(node.clone(), rx);
+    }
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
@@ -122,6 +235,61 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .route(
+            "/governance/proposals",
+            get({
+                let node = node.clone();
+                move || {
+                    let node = node.clone();
+                    async move {
+                        let chain = node.state.state.get_chain_state().await.ok();
+                        let proposals = chain.map(|c| c.proposals.values().cloned().collect::<Vec<_>>());
+                        Json(proposals)
+                    }
+                }
+            }),
+        )
+        .route(
+            "/governance/proposal/:id",
+            get({
+                let node = node.clone();
+                move |Path(id): Path<String>| {
+                    let node = node.clone();
+                    async move {
+                        let Ok(uuid) = Uuid::parse_str(&id) else {
+                            return Json(None::<state::Proposal>);
+                        };
+                        let proposal = node
+                            .state
+                            .state
+                            .get_chain_state()
+                            .await
+                            .ok()
+                            .and_then(|c| c.proposals.get(&uuid).cloned());
+                        Json(proposal)
+                    }
+                }
+            }),
+        )
+        .route(
+            "/privacy/pool",
+            get({
+                let node = node.clone();
+                move || {
+                    let node = node.clone();
+                    async move {
+                        let pool = node
+                            .state
+                            .state
+                            .get_chain_state()
+                            .await
+                            .ok()
+                            .and_then(|c| c.privacy_pools.get("shielded").cloned());
+                        Json(pool)
+                    }
+                }
+            }),
+        )
+        .route(
             "/send_raw_tx",
             post({
                 let node = node.clone();
@@ -131,7 +299,8 @@ async fn main() -> anyhow::Result<()> {
                         if verify_tx_signature(&body.tx).is_err() {
                             return Json("invalid signature");
                         }
-                        node.mempool.lock().unwrap().push(body.tx);
+                        enqueue_tx(&node, body.tx.clone());
+                        node.network.broadcast_tx(&body.tx);
                         Json("ok")
                     }
                 }
@@ -147,6 +316,54 @@ async fn main() -> anyhow::Result<()> {
                         let blocks = node.blocks.lock().unwrap();
                         let block = blocks.get(height).cloned();
                         Json(block)
+                    }
+                }
+            }),
+        )
+        .route(
+            "/da/commitment/:id",
+            get({
+                let node = node.clone();
+                move |Path(id): Path<String>| {
+                    let node = node.clone();
+                    async move {
+                        let commitment = node.da.get_commitment(&id).await.ok();
+                        Json(commitment)
+                    }
+                }
+            }),
+        )
+        .route(
+            "/da/sample",
+            get({
+                let node = node.clone();
+                move |Query(q): Query<SampleQuery>| {
+                    let node = node.clone();
+                    async move {
+                        let ok = node
+                            .da
+                            .sample(&q.blob_id, q.samples.unwrap_or(2))
+                            .await
+                            .is_ok();
+                        Json(ok)
+                    }
+                }
+            }),
+        )
+        .route(
+            "/block_proof/:height",
+            get({
+                let node = node.clone();
+                move |Path(height): Path<usize>| {
+                    let node = node.clone();
+                    async move {
+                        let blocks = node.blocks.lock().unwrap();
+                        let block = blocks.get(height).cloned();
+                        let proof = block.and_then(|b| {
+                            let h = hash_block(&b);
+                            node.block_proofs.lock().unwrap().get(&h).cloned()
+                        });
+                        Json(proof)
                     }
                 }
             }),
@@ -305,6 +522,10 @@ fn spawn_block_production(node: Node) -> JoinHandle<()> {
 }
 
 async fn handle_message(node: &Node, msg: ConsensusMessage) {
+    if !verify_consensus_message(node, &msg).await {
+        warn!("discarded invalid consensus message");
+        return;
+    }
     match msg {
         ConsensusMessage::Propose(proposal) => {
             if let Err(err) = node.consensus.propose(proposal.clone()).await {
@@ -346,10 +567,55 @@ async fn handle_message(node: &Node, msg: ConsensusMessage) {
     process_commits(node).await;
 }
 
+async fn verify_consensus_message(node: &Node, msg: &ConsensusMessage) -> bool {
+    match msg {
+        ConsensusMessage::Propose(p) => {
+            if address_from_pubkey(&p.public_key) != p.block.header.proposer_id {
+                return false;
+            }
+            let block_id = hash_block(&p.block);
+            verify_signature_bytes(&p.public_key, &p.signature, block_id.as_slice()).is_ok()
+        }
+        ConsensusMessage::Vote(v) => {
+            let validators = node.consensus.validator_set().await.unwrap_or_default();
+            if let Some(expected) = validators.iter().find(|val| val.id == v.voter.id) {
+                if expected.pubkey != v.voter.pubkey {
+                    return false;
+                }
+            }
+            let msg_bytes = bincode::serialize(&(v.block_id, v.view)).unwrap_or_default();
+            verify_signature_bytes(&v.voter.pubkey, &v.signature, &msg_bytes).is_ok()
+        }
+        ConsensusMessage::Timeout { from, .. } => {
+            let validators = node.consensus.validator_set().await.unwrap_or_default();
+            validators.iter().any(|val| val.id == from.id)
+        }
+    }
+}
+
 async fn process_commits(node: &Node) {
     while let Some(committed) = node.consensus.pop_commit() {
         info!("commit block {:?}", hex::encode(committed));
     }
+}
+
+fn spawn_p2p_consensus_listener(
+    node: Node,
+    mut rx: mpsc::Receiver<ConsensusMessage>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            handle_message(&node, msg).await;
+        }
+    })
+}
+
+fn spawn_tx_gossip_listener(node: Node, mut rx: mpsc::Receiver<Tx>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(tx) = rx.recv().await {
+            enqueue_tx(&node, tx);
+        }
+    })
 }
 
 fn spawn_network_listener(node: Node, mut rx: broadcast::Receiver<ConsensusMessage>) -> JoinHandle<()> {
@@ -366,6 +632,7 @@ async fn build_block(node: &Node) -> Option<Block> {
         if mempool.is_empty() {
             return None;
         }
+        mempool.sort_by(|a, b| tx_priority(b, node.state.base_fee).cmp(&tx_priority(a, node.state.base_fee)));
         mempool.drain(..).collect::<Vec<_>>()
     };
 
@@ -381,11 +648,6 @@ async fn build_block(node: &Node) -> Option<Block> {
         Ok(bytes) => node.da.submit_blob("l1", &bytes).await.ok(),
         Err(_) => None,
     };
-    let da_root = blob
-        .as_ref()
-        .map(|b| blake3::hash(b.id.as_bytes()))
-        .map(|h| *h.as_bytes())
-        .unwrap_or([0u8; 32]);
 
     let proposer_id = node
         .local_validator
@@ -402,7 +664,13 @@ async fn build_block(node: &Node) -> Option<Block> {
         proposer_id,
         state_root: [0u8; 32],
         l1_tx_root,
-        da_root,
+        da_commitment: blob.as_ref().map(|b| runtime::BlockDACommitment {
+            root: b.commitment.root,
+            total_shards: b.commitment.total_shards as u32,
+            data_shards: b.commitment.data_shards as u32,
+            parity_shards: b.commitment.parity_shards as u32,
+            shard_size: b.commitment.shard_size as u32,
+        }),
         domain_roots: vec![],
         gas_used: 0,
         gas_limit: node.state.max_gas_per_block,
@@ -429,6 +697,41 @@ fn tx_hash(tx: &Tx) -> [u8; 32] {
     *blake3::hash(&bytes).as_bytes()
 }
 
+fn tx_priority(tx: &Tx, base_fee: u128) -> u128 {
+    if let Some(max_fee) = tx.max_fee {
+        let priority = tx.max_priority_fee.unwrap_or(0);
+        return max_fee.saturating_add(priority);
+    }
+    tx.gas_price.unwrap_or(base_fee)
+}
+
+fn enqueue_tx(node: &Node, tx: Tx) {
+    if verify_tx_signature(&tx).is_err() {
+        warn!("dropped tx with invalid signature");
+        return;
+    }
+    let h = tx_hash(&tx);
+    if node.tx_index.lock().unwrap().contains_key(&h) {
+        return;
+    }
+    let mut mempool = node.mempool.lock().unwrap();
+    if mempool.len() >= MEMPOOL_LIMIT {
+        warn!("mempool full, dropping tx");
+        return;
+    }
+    if mempool.iter().any(|existing| tx_hash(existing) == h) {
+        return;
+    }
+    mempool.push(tx);
+}
+
+fn drop_included_txs(node: &Node, txs: &[Tx]) {
+    let drop_hashes: HashSet<_> = txs.iter().map(tx_hash).collect();
+    let mut mempool = node.mempool.lock().unwrap();
+    mempool.retain(|t| !drop_hashes.contains(&tx_hash(t)));
+}
+
+
 async fn execute_and_record(node: &Node, block: &Block) -> anyhow::Result<(Block, Hash)> {
     let mut sealed = block.clone();
     let block_id = hash_block(&sealed);
@@ -444,9 +747,14 @@ async fn execute_and_record(node: &Node, block: &Block) -> anyhow::Result<(Block
         if proof.samples.is_empty() {
             anyhow::bail!("empty DA proof");
         }
-        let expected = blake3::hash(blob_id.as_bytes());
-        if sealed.header.da_root != *expected.as_bytes() {
-            anyhow::bail!("da_root mismatch");
+        let Some(commitment) = sealed.header.da_commitment.as_ref() else {
+            anyhow::bail!("missing da commitment in header");
+        };
+        if proof.commitment.root != commitment.root {
+            anyhow::bail!("da commitment root mismatch");
+        }
+        if !verify_da_proof(&proof) {
+            anyhow::bail!("invalid DA sampling proof");
         }
     }
 
@@ -456,6 +764,12 @@ async fn execute_and_record(node: &Node, block: &Block) -> anyhow::Result<(Block
     }
     sealed.header.state_root = result.state_root;
     sealed.header.gas_used = result.gas_used;
+
+    if let Some(zk) = node.zk.clone() {
+        if let Err(err) = prove_block(node, zk, &sealed, &result, block_id).await {
+            warn!("zk proof generation failed: {err}");
+        }
+    }
 
     {
         let mut store = node.block_store.lock().unwrap();
@@ -469,8 +783,47 @@ async fn execute_and_record(node: &Node, block: &Block) -> anyhow::Result<(Block
         let mut chain = node.blocks.lock().unwrap();
         chain.push(sealed.clone());
     }
+    drop_included_txs(node, &sealed.transactions);
     index_txs(node, &sealed);
     Ok((sealed, block_id))
+}
+
+async fn prove_block(
+    node: &Node,
+    zk: Arc<dyn ZkBackend>,
+    block: &Block,
+    result: &runtime::BlockApplyResult,
+    block_id: Hash,
+) -> anyhow::Result<()> {
+    let events_root = zk_program_block::hash_events(&result.events);
+    let witness =
+        zk_program_block::encode_witness(block, result.state_root, &result.events, result.gas_used)?;
+    let da_root = block
+        .header
+        .da_commitment
+        .as_ref()
+        .map(|c| c.root)
+        .unwrap_or([0u8; 32]);
+    let commitments = zk_program_block::commitments(result.state_root, events_root, da_root);
+    let artifact = zk
+        .prove(ProofRequest {
+            program_id: ProgramId::Block,
+            witness,
+            commitments: Some(commitments),
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("prove error: {e}"))?;
+    zk.verify(&artifact)
+        .await
+        .map_err(|e| anyhow::anyhow!("verify error: {e}"))?;
+
+    let record = BlockProof {
+        block_hash: block_id,
+        state_root: result.state_root,
+        proof: artifact,
+    };
+    node.block_proofs.lock().unwrap().insert(block_id, record);
+    Ok(())
 }
 
 fn now_millis() -> u64 {
@@ -541,6 +894,7 @@ async fn create_node_with(
     ctx: ExecutionContext<InMemoryStateStore>,
     da: InMemoryDA,
     network: Arc<dyn ConsensusNetwork + Send + Sync>,
+    zk: Option<Arc<dyn ZkBackend>>,
 ) -> anyhow::Result<Node> {
     let signing_key = Arc::new(derive_signing_key(node_id));
     let verifying_key = signing_key.verifying_key().to_bytes().to_vec();
@@ -560,9 +914,11 @@ async fn create_node_with(
         network,
         tx_index: Arc::new(Mutex::new(HashMap::new())),
         block_store: Arc::new(Mutex::new(HashMap::new())),
+        block_proofs: Arc::new(Mutex::new(HashMap::new())),
         applied: Arc::new(Mutex::new(HashSet::new())),
         signing_key,
         verifying_key,
+        zk,
     })
 }
 
@@ -642,8 +998,8 @@ mod tests {
         let network = Arc::new(bus.clone());
         let da = InMemoryDA::new();
 
-        let node1 = create_node_with(node1_id, ctx1, da.clone(), network.clone()).await?;
-        let node2 = create_node_with(node2_id, ctx2, da.clone(), network.clone()).await?;
+        let node1 = create_node_with(node1_id, ctx1, da.clone(), network.clone(), None).await?;
+        let node2 = create_node_with(node2_id, ctx2, da.clone(), network.clone(), None).await?;
 
         let listener1 = spawn_network_listener(node1.clone(), rx1);
         let listener2 = spawn_network_listener(node2.clone(), rx2);

@@ -12,9 +12,10 @@ pub fn apply_l1_tx(tx: &Tx) -> anyhow::Result<()> {
         TxPayload::RollupBridgeDeposit { .. } | TxPayload::RollupBridgeWithdraw { .. } => {
             rollup_bridge::handle(tx)
         }
-        TxPayload::GovernanceProposal { .. } | TxPayload::GovernanceVote { .. } => {
-            governance::handle(tx)
-        }
+        TxPayload::GovernanceProposal { .. }
+        | TxPayload::GovernanceVote { .. }
+        | TxPayload::GovernanceBridgeApprove { .. }
+        | TxPayload::GovernanceExecute { .. } => governance::handle(tx),
         TxPayload::PrivacyDeposit { .. } => privacy_pools::deposit(tx),
         TxPayload::PrivacyWithdraw { .. } => privacy_pools::withdraw(tx),
         _ => Ok(()),

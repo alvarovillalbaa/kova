@@ -3,11 +3,11 @@
 Blunt read: most of the spec remains aspirational; the repo is scaffold-heavy. Below is what’s missing versus `docs/spec.md`, and any extras that slipped in.
 
 ### Not built yet (per spec)
-- ZK stack: no circuits/prover/verifier wiring; `blockchain/zk/` is placeholders only.
+- ZK stack: SP1 proving path expects real ELFs via `ZK_SP1_*_ELF`; circuits/prover farm not shipped.
 - Cross-domain/IBC: only stub packet/header types; no relayer, light-client updates, bridge contracts, or force-inclusion paths.
 - L1/L2 contract suite: staking/governance/bridge/privacy contracts are empty stubs; no on-chain slashing, timelocks, or upgrade manager.
-- Data availability sampling: in-memory blob store only; no erasure coding, sampling verification, or DA light-node flows; block headers don’t carry real DA commitments.
-- Shared sequencer hardening: single in-memory sequencer, no slashing, no MEV/ordering rules, no force-include, no multi-sequencer/rotation.
+- Data availability sampling: erasure-coded commitments now wired, but no production-grade encoding, prover audits, or distributed DA storage; light-node flows are HTTP-only and rely on the in-memory store.
+- Shared sequencer hardening: basic rotation + force-include queue scaffolding exists, but no slashing, no MEV/ordering rules, and no distributed coordinator beyond logging.
 - Privacy layer: no circuits, nullifier/commitment checks, or shielded accounting; runtime “withdraw” just mints +1 without proofs.
 - Governance v2: no proposal lifecycle, voting weights, execution/timelock, or multisig bridge to phase-1 control.
 - Economic layer: fee burning and splits are constants; no emission/treasury logic, staking rewards, or domain risk caps/insurance.
@@ -21,7 +21,7 @@ Blunt read: most of the spec remains aspirational; the repo is scaffold-heavy. B
 ### Built/underway (aligned to scope)
 - Consensus skeleton: HotStuff-like engine with stake-weighted leader, quorum tracking, commit queue (`blockchain/protocol/consensus`).
 - Runtime execution: staking/delegation, domain registry, rollup batch commit, governance placeholders, privacy deposit/withdraw, fee split constants (`blockchain/protocol/runtime`).
-- DA/Sequencer stubs: in-memory DA provider + sampler; sequencer batches to DA (`blockchain/protocol/da`, `blockchain/sequencer/core`).
+- DA/Sequencer stubs: in-memory DA provider with erasure-coded shard commitments + sampling proof verification and light-node endpoints (`/da/commitment/:id`, `/da/sample`); sequencer batches to DA (`blockchain/protocol/da`, `blockchain/sequencer/core`).
 - Devnet scaffolding: monorepo layout, docker-compose with validators/DA/sequencer/indexer/frontend/mixnet stub (`blockchain/ops/docker`).
 - Indexer + API: Postgres schema/migrations and Fastify API for blocks/tx/domains/stats/privacy (`blockchain/indexer`).
 - Frontend shell: Next.js routes for explorer, domains, staking, governance, wallet, dev, sequencer, testnet (`blockchain/frontend/apps/web`).

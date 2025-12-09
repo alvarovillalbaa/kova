@@ -11,4 +11,8 @@ tracing = { workspace = true }
 runtime = { path = "../../protocol/runtime" }
 da = { path = "../../protocol/da" }
 async-trait = { workspace = true }
+zk-core = { path = "../../zk/core" }
+zk-program-rollup = { path = "../../zk/programs/rollup" }
+uuid = { workspace = true }
+blake3 = "1"
 

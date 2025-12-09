@@ -11,4 +11,7 @@ tracing = { workspace = true }
 runtime = { path = "../runtime" }
 consensus = { path = "../consensus" }
 state = { path = "../state" }
+tokio = { workspace = true }
+libp2p = { version = "0.54", features = ["tokio", "gossipsub", "noise", "tcp", "dns", "quic", "macros", "serde"] }
+futures = "0.3"
 

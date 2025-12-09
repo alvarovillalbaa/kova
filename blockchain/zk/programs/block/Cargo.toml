@@ -1,0 +1,13 @@
+ [package]
+ name = "zk-program-block"
+ version = "0.1.0"
+ edition = "2021"
+
+ [dependencies]
+ anyhow = { workspace = true }
+ serde = { workspace = true }
+ serde_json = { workspace = true }
+ bincode = "1"
+ blake3 = "1"
+ runtime = { path = "../../../protocol/runtime" }
+ zk-core = { path = "../../core" }

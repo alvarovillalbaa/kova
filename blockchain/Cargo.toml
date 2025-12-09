@@ -24,6 +24,13 @@ members = [
     "contracts/privacy_pools",
     "indexer/indexer-core",
     "sdk/sdk-rust",
+    "sdk/cli",
+    "zk/core",
+    "zk/sp1",
+    "zk/programs/block",
+    "zk/programs/rollup",
+    "zk/programs/privacy",
+    "ops/faucet",
 ]
 resolver = "2"
 
@@ -60,4 +67,5 @@ sqlx = { version = "0.7", features = [
     "chrono",
 ] }
 bigdecimal = "0.4"
+proptest = "1.4"
 

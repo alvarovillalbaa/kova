@@ -59,6 +59,13 @@ impl BlockSink for PostgresSink {
         let domain_roots = serde_json::to_value(&block.header.domain_roots)?;
         let da_blobs = serde_json::to_value(&block.da_blobs)?;
 
+        let da_root = block
+            .header
+            .da_commitment
+            .as_ref()
+            .map(|c| c.root)
+            .unwrap_or([0u8; 32]);
+
         sqlx::query!(
             r#"
             INSERT INTO blocks (
@@ -90,7 +97,7 @@ impl BlockSink for PostgresSink {
             block.header.proposer_id.to_vec(),
             block.header.state_root.to_vec(),
             block.header.l1_tx_root.to_vec(),
-            block.header.da_root.to_vec(),
+            da_root.to_vec(),
             domain_roots,
             gas_used,
             gas_limit,
@@ -205,7 +212,7 @@ async fn handle_payload(
             .execute(&mut **tx)
             .await?;
         }
-        TxPayload::GovernanceProposal { payload } => {
+        TxPayload::GovernanceProposal { payload, .. } => {
             sqlx::query!(
                 r#"
                 INSERT INTO governance_events (tx_id, kind, payload)
@@ -217,25 +224,44 @@ async fn handle_payload(
             .execute(&mut **tx)
             .await?;
         }
-        TxPayload::GovernanceVote {
-            proposal_id,
-            support,
-            weight,
-        } => {
+        TxPayload::GovernanceVote { proposal_id, support } => {
             sqlx::query!(
                 r#"
-                INSERT INTO governance_events (tx_id, kind, proposal_id, support, weight)
-                VALUES ($1,'vote',$2,$3,$4)
+                INSERT INTO governance_events (tx_id, kind, proposal_id, support)
+                VALUES ($1,'vote',$2,$3)
                 "#,
                 tx_id,
                 proposal_id,
-                support,
-                BigDecimal::from(*weight)
+                support
             )
             .execute(&mut **tx)
             .await?;
         }
-        TxPayload::PrivacyDeposit { commitment } => {
+        TxPayload::GovernanceBridgeApprove { proposal_id } => {
+            sqlx::query!(
+                r#"
+                INSERT INTO governance_events (tx_id, kind, proposal_id)
+                VALUES ($1,'bridge_approve',$2)
+                "#,
+                tx_id,
+                proposal_id
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        TxPayload::GovernanceExecute { proposal_id } => {
+            sqlx::query!(
+                r#"
+                INSERT INTO governance_events (tx_id, kind, proposal_id)
+                VALUES ($1,'execute',$2)
+                "#,
+                tx_id,
+                proposal_id
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        TxPayload::PrivacyDeposit { commitment, .. } => {
             sqlx::query!(
                 r#"
                 INSERT INTO privacy_actions (tx_id, action, commitment)
@@ -247,7 +273,7 @@ async fn handle_payload(
             .execute(&mut **tx)
             .await?;
         }
-        TxPayload::PrivacyWithdraw { nullifier, recipient } => {
+        TxPayload::PrivacyWithdraw { nullifier, recipient, .. } => {
             sqlx::query!(
                 r#"
                 INSERT INTO privacy_actions (tx_id, action, nullifier, recipient)
@@ -331,6 +357,8 @@ fn payload_kind(payload: &TxPayload) -> &'static str {
         TxPayload::RollupBridgeWithdraw { .. } => "rollup_bridge_withdraw",
         TxPayload::GovernanceProposal { .. } => "governance_proposal",
         TxPayload::GovernanceVote { .. } => "governance_vote",
+        TxPayload::GovernanceBridgeApprove { .. } => "governance_bridge_approve",
+        TxPayload::GovernanceExecute { .. } => "governance_execute",
         TxPayload::PrivacyDeposit { .. } => "privacy_deposit",
         TxPayload::PrivacyWithdraw { .. } => "privacy_withdraw",
         TxPayload::SystemUpgrade { .. } => "system_upgrade",

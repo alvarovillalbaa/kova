@@ -1,0 +1,198 @@
+version: "3.9"
+
+x-node-base: &node-base
+  build:
+    context: ../../
+    dockerfile: ops/docker/node.Dockerfile
+  environment:
+    - RUST_LOG=info
+  volumes:
+    - ../../ops/docker/genesis.json:/app/ops/docker/genesis.json
+  command: ["/bin/sh", "-c", "sleep 1 && ./node"]
+
+services:
+  validator1:
+    <<: *node-base
+    container_name: kova-testnet-validator1
+    environment:
+      - NODE_ID=validator1
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0101010101010101010101010101010101010101010101010101010101010101
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9000/quic-v1
+    ports:
+      - "8545:8545"
+      - "9090:9090"
+      - "9000:9000/udp"
+
+  validator2:
+    <<: *node-base
+    container_name: kova-testnet-validator2
+    environment:
+      - NODE_ID=validator2
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0202020202020202020202020202020202020202020202020202020202020202
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9001/quic-v1
+      - P2P_BOOTSTRAP=/dns4/validator1/udp/9000/quic-v1
+    ports:
+      - "9001:9001/udp"
+
+  validator3:
+    <<: *node-base
+    container_name: kova-testnet-validator3
+    environment:
+      - NODE_ID=validator3
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0303030303030303030303030303030303030303030303030303030303030303
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9002/quic-v1
+      - P2P_BOOTSTRAP=/dns4/validator1/udp/9000/quic-v1
+    ports:
+      - "9002:9002/udp"
+
+  validator4:
+    <<: *node-base
+    container_name: kova-testnet-validator4
+    environment:
+      - NODE_ID=validator4
+      - GENESIS_PATH=/app/ops/docker/genesis.json
+      - VALIDATOR_OWNER=0x0404040404040404040404040404040404040404040404040404040404040404
+      - P2P_LISTEN=/ip4/0.0.0.0/udp/9003/quic-v1
+      - P2P_BOOTSTRAP=/dns4/validator1/udp/9000/quic-v1
+    ports:
+      - "9003:9003/udp"
+
+  sequencer:
+    build:
+      context: ../../
+      dockerfile: ops/docker/sequencer.Dockerfile
+    container_name: kova-testnet-sequencer
+    environment:
+      - SEQUENCER_PORT=7545
+    ports:
+      - "7545:7545"
+    depends_on:
+      - validator1
+
+  postgres:
+    image: postgres:15
+    container_name: kova-testnet-postgres
+    environment:
+      POSTGRES_USER: kova
+      POSTGRES_PASSWORD: kova
+      POSTGRES_DB: kova_indexer
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  indexer_api:
+    image: node:20
+    container_name: kova-testnet-indexer-api
+    working_dir: /app
+    volumes:
+      - ../../indexer/api:/app
+    command: ["sh", "-c", "npm install && npm run dev"]
+    ports:
+      - "4000:4000"
+    environment:
+      - DATABASE_URL=postgres://kova:kova@postgres:5432/kova_indexer
+    depends_on:
+      - postgres
+
+  indexer_ingest:
+    build:
+      context: ../../
+      dockerfile: ops/docker/indexer.Dockerfile
+    container_name: kova-testnet-indexer-ingest
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgres://kova:kova@postgres:5432/kova_indexer
+      - RPC_URL=http://validator1:8545
+      - START_HEIGHT=0
+    depends_on:
+      - postgres
+      - validator1
+
+  frontend:
+    image: node:20
+    container_name: kova-testnet-frontend
+    working_dir: /app
+    volumes:
+      - ../../frontend/apps/web:/app
+    command: ["npm", "run", "dev"]
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_RPC_URL=http://localhost:8545
+      - NEXT_PUBLIC_INDEXER_URL=http://localhost:4000
+      - NEXT_PUBLIC_SEQUENCER_URL=http://localhost:7545
+
+  faucet:
+    build:
+      context: ../../
+      dockerfile: ops/docker/faucet.Dockerfile
+    container_name: kova-testnet-faucet
+    environment:
+      - RPC_URL=http://validator1:8545
+      - CHAIN_ID=kova-testnet
+      - FAUCET_AMOUNT=1000000
+      - FAUCET_LISTEN=0.0.0.0:8090
+      - FAUCET_SK=${FAUCET_SK:?set faucet private key hex}
+    ports:
+      - "8090:8090"
+    depends_on:
+      - validator1
+
+  node_exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: kova-testnet-node-exporter
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: kova-testnet-cadvisor
+    privileged: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: kova-testnet-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - promdata:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9091:9090"
+    depends_on:
+      - node_exporter
+      - cadvisor
+
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: kova-testnet-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
+  promdata:
+  grafana-data:

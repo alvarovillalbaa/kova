@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -57,6 +58,14 @@ pub struct Delegation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Unbonding {
+    pub owner: Address,
+    pub validator_id: Option<Uuid>,
+    pub amount: u128,
+    pub release_height: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DomainType {
     EvmSharedSecurity,
     Wasm,
@@ -97,14 +106,73 @@ pub struct DomainRoot {
     pub proof_meta: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProposalStatus {
+    Pending,
+    Active,
+    Defeated,
+    Succeeded,
+    Queued,
+    Executed,
+    Cancelled,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VoteChoice {
+    For,
+    Against,
+    Abstain,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoteRecord {
+    pub voter: Address,
+    pub choice: VoteChoice,
+    pub weight: u128,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proposal {
     pub id: Uuid,
     pub payload: serde_json::Value,
     pub kind: String,
-    pub status: String,
-    pub votes: serde_json::Value,
-    pub timers: serde_json::Value,
+    pub status: ProposalStatus,
+    pub proposer: Address,
+    pub start: u64,
+    pub end: u64,
+    pub eta: Option<u64>,
+    pub snapshot_total_stake: u128,
+    pub for_votes: u128,
+    pub against_votes: u128,
+    pub abstain_votes: u128,
+    pub votes: Vec<VoteRecord>,
+    pub execution: serde_json::Value,
+    pub voter_weights: HashMap<Address, u128>,
+    pub approvals: Vec<Address>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceParams {
+    pub voting_period_ms: u64,
+    pub timelock_ms: u64,
+    pub quorum_bps: u16,
+    pub approval_threshold_bps: u16,
+    pub multisig_signers: Vec<Address>,
+    pub multisig_threshold: u8,
+}
+
+impl Default for GovernanceParams {
+    fn default() -> Self {
+        Self {
+            voting_period_ms: 60 * 60 * 1000,   // 1 hour
+            timelock_ms: 30 * 60 * 1000,        // 30 minutes
+            quorum_bps: 2_000,                  // 20%
+            approval_threshold_bps: 5_000,      // 50%
+            multisig_signers: Vec::new(),
+            multisig_threshold: 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -120,6 +188,20 @@ pub struct PrivacyPool {
     pub merkle_root: Hash,
     pub parameters: serde_json::Value,
     pub nullifiers: Vec<Hash>,
+    pub commitments: Vec<Hash>,
+    pub total_shielded: u128,
+}
+
+impl Default for PrivacyPool {
+    fn default() -> Self {
+        Self {
+            merkle_root: [0u8; 32],
+            parameters: serde_json::json!({}),
+            nullifiers: Vec::new(),
+            commitments: Vec::new(),
+            total_shielded: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -133,6 +215,10 @@ pub struct ChainState {
     pub proposals: HashMap<Uuid, Proposal>,
     pub fee_pools: FeePools,
     pub privacy_pools: HashMap<String, PrivacyPool>,
+    pub governance_params: GovernanceParams,
+    pub total_supply: u128,
+    pub last_reward_height: u64,
+    pub pending_unbonds: Vec<Unbonding>,
 }
 
 impl ChainState {
@@ -187,6 +273,24 @@ impl ChainState {
 
         for pool in self.privacy_pools.values() {
             if let Ok(bytes) = bincode::serialize(pool) {
+                leaves.push(hash_leaf(&bytes));
+            }
+        }
+
+        if let Ok(bytes) = bincode::serialize(&self.governance_params) {
+            leaves.push(hash_leaf(&bytes));
+        }
+
+        if let Ok(bytes) = bincode::serialize(&self.total_supply) {
+            leaves.push(hash_leaf(&bytes));
+        }
+
+        if let Ok(bytes) = bincode::serialize(&self.last_reward_height) {
+            leaves.push(hash_leaf(&bytes));
+        }
+
+        for unbond in &self.pending_unbonds {
+            if let Ok(bytes) = bincode::serialize(unbond) {
                 leaves.push(hash_leaf(&bytes));
             }
         }
